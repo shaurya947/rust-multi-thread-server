@@ -2,6 +2,7 @@ use std::{
     format, fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
+    sync::Arc,
     thread,
     time::Duration,
 };
@@ -9,15 +10,20 @@ use std::{
 pub fn run() -> std::io::Result<()> {
     // read sample html response as string
     let (resp_body_ok, resp_body_404) = (
-        fs::read_to_string("hello.html")?,
-        fs::read_to_string("404.html")?,
+        Arc::new(fs::read_to_string("hello.html")?),
+        Arc::new(fs::read_to_string("404.html")?),
     );
 
     let listener = TcpListener::bind("127.0.0.1:8080")?;
 
-    // accept connections and process them serially
+    // accept connections and process them in threads
     for stream in listener.incoming() {
-        handle_client(stream?, &resp_body_ok, &resp_body_404);
+        let (stream, resp_body_ok, resp_body_404) = (
+            stream?,
+            Arc::clone(&resp_body_ok),
+            Arc::clone(&resp_body_404),
+        );
+        thread::spawn(move || handle_client(stream, &resp_body_ok, &resp_body_404));
     }
     Ok(())
 }
