@@ -2,12 +2,16 @@ use std::{
     format, fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    sync::Arc,
+    sync::{Arc, RwLock},
     thread,
     time::Duration,
 };
 
+const MAX_CONCURRENT_THREADS: i32 = 4;
+
 pub fn run() -> std::io::Result<()> {
+    let thread_count = Arc::new(RwLock::new(0));
+
     // read sample html response as string
     let (resp_body_ok, resp_body_404) = (
         Arc::new(fs::read_to_string("hello.html")?),
@@ -18,12 +22,26 @@ pub fn run() -> std::io::Result<()> {
 
     // accept connections and process them in threads
     for stream in listener.incoming() {
-        let (stream, resp_body_ok, resp_body_404) = (
+        // wait until thread count falls below max
+        while *thread_count.read().unwrap() >= MAX_CONCURRENT_THREADS {
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        // increment thread count to indicate spawning a new thread
+        {
+            *thread_count.write().unwrap() += 1;
+        }
+
+        let (stream, resp_body_ok, resp_body_404, thread_count) = (
             stream?,
             Arc::clone(&resp_body_ok),
             Arc::clone(&resp_body_404),
+            Arc::clone(&thread_count),
         );
-        thread::spawn(move || handle_client(stream, &resp_body_ok, &resp_body_404));
+        thread::spawn(move || {
+            handle_client(stream, &resp_body_ok, &resp_body_404);
+            *thread_count.write().unwrap() -= 1;
+        });
     }
     Ok(())
 }
