@@ -1,17 +1,18 @@
 use std::{
-    collections::VecDeque,
     format, fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread,
     time::Duration,
 };
 
-const MAX_CONCURRENT_THREADS: i32 = 4;
+use thread_pool::ThreadPool;
+
+mod thread_pool;
 
 pub fn run() -> std::io::Result<()> {
-    let tcp_queue = Arc::new(Mutex::new(VecDeque::new()));
+    let thread_pool = ThreadPool::new(4);
 
     // read sample html response as string
     let (resp_body_ok, resp_body_404) = (
@@ -21,36 +22,14 @@ pub fn run() -> std::io::Result<()> {
 
     let listener = TcpListener::bind("127.0.0.1:8080")?;
 
-    // launch forever-alive threads ready to process requests
-    (0..MAX_CONCURRENT_THREADS).for_each(|_| {
-        let (tcp_queue, resp_body_ok, resp_body_404) = (
-            Arc::clone(&tcp_queue),
+    // accept connections and process them in threads
+    for stream in listener.incoming() {
+        let (stream, resp_body_ok, resp_body_404) = (
+            stream?,
             Arc::clone(&resp_body_ok),
             Arc::clone(&resp_body_404),
         );
-        thread::spawn(move || {
-            loop {
-                // attempt to dequeue a TCP stream
-                let mut tcp_stream = None;
-                {
-                    let mut lock = tcp_queue.try_lock();
-                    if let Ok(ref mut tcp_queue) = lock {
-                        tcp_stream = tcp_queue.pop_front();
-                    }
-                }
-
-                if let Some(tcp_stream) = tcp_stream {
-                    handle_client(tcp_stream, &resp_body_ok, &resp_body_404);
-                } else {
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-        });
-    });
-
-    // accept connections and process them in threads
-    for stream in listener.incoming() {
-        tcp_queue.lock().unwrap().push_back(stream?);
+        thread_pool.enqueue(move || handle_client(stream, &resp_body_ok, &resp_body_404))
     }
     Ok(())
 }
