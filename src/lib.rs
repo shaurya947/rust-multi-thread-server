@@ -1,8 +1,9 @@
 use std::{
+    collections::VecDeque,
     format, fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -10,7 +11,7 @@ use std::{
 const MAX_CONCURRENT_THREADS: i32 = 4;
 
 pub fn run() -> std::io::Result<()> {
-    let thread_count = Arc::new(RwLock::new(0));
+    let tcp_queue = Arc::new(Mutex::new(VecDeque::new()));
 
     // read sample html response as string
     let (resp_body_ok, resp_body_404) = (
@@ -20,28 +21,36 @@ pub fn run() -> std::io::Result<()> {
 
     let listener = TcpListener::bind("127.0.0.1:8080")?;
 
-    // accept connections and process them in threads
-    for stream in listener.incoming() {
-        // wait until thread count falls below max
-        while *thread_count.read().unwrap() >= MAX_CONCURRENT_THREADS {
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        // increment thread count to indicate spawning a new thread
-        {
-            *thread_count.write().unwrap() += 1;
-        }
-
-        let (stream, resp_body_ok, resp_body_404, thread_count) = (
-            stream?,
+    // launch forever-alive threads ready to process requests
+    (0..MAX_CONCURRENT_THREADS).for_each(|_| {
+        let (tcp_queue, resp_body_ok, resp_body_404) = (
+            Arc::clone(&tcp_queue),
             Arc::clone(&resp_body_ok),
             Arc::clone(&resp_body_404),
-            Arc::clone(&thread_count),
         );
         thread::spawn(move || {
-            handle_client(stream, &resp_body_ok, &resp_body_404);
-            *thread_count.write().unwrap() -= 1;
+            loop {
+                // attempt to dequeue a TCP stream
+                let mut tcp_stream = None;
+                {
+                    let mut lock = tcp_queue.try_lock();
+                    if let Ok(ref mut tcp_queue) = lock {
+                        tcp_stream = tcp_queue.pop_front();
+                    }
+                }
+
+                if let Some(tcp_stream) = tcp_stream {
+                    handle_client(tcp_stream, &resp_body_ok, &resp_body_404);
+                } else {
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
         });
+    });
+
+    // accept connections and process them in threads
+    for stream in listener.incoming() {
+        tcp_queue.lock().unwrap().push_back(stream?);
     }
     Ok(())
 }
