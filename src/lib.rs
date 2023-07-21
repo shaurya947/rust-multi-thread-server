@@ -29,7 +29,7 @@ pub fn run() -> std::io::Result<()> {
             Arc::clone(&resp_body_ok),
             Arc::clone(&resp_body_404),
         );
-        thread_pool.enqueue(move || handle_client(stream, &resp_body_ok, &resp_body_404))
+        thread_pool.execute(move || handle_client(stream, &resp_body_ok, &resp_body_404))
     }
     Ok(())
 }
