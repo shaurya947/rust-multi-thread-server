@@ -1,5 +1,6 @@
+use async_std::task;
 use hello::run;
 
 fn main() {
-    run().expect("Failed to start server");
+    task::block_on(run()).expect("Failed to start server");
 }
